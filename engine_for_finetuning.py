@@ -14,6 +14,7 @@ import torch
 from timm.utils import ModelEma
 import utils
 from einops import rearrange
+from tqdm import tqdm
 
 def train_class_batch(model, samples, target, criterion, ch_names):
     outputs = model(samples, ch_names)
@@ -48,7 +49,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     else:
         optimizer.zero_grad()
 
-    for data_iter_step, (samples, targets) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    for data_iter_step, (samples, targets) in tqdm(enumerate(metric_logger.log_every(data_loader, print_freq, header)),
+                                                   total=len(data_loader), desc=header):
         step = data_iter_step // update_freq
         if step >= num_training_steps_per_epoch:
             continue
@@ -73,7 +75,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             loss, output = train_class_batch(
                 model, samples, targets, criterion, input_chans)
         else:
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast(device_type=device.type):
                 loss, output = train_class_batch(
                     model, samples, targets, criterion, input_chans)
 
@@ -108,10 +110,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     model_ema.update(model)
             loss_scale_value = loss_scaler.state_dict()["scale"]
 
-        torch.cuda.synchronize()
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
+        elif device.type == 'cpu':
+            torch.cpu.synchronize()
+        else:
+            raise Exception(f"Invalid device: device={device}")
 
         if is_binary:
-            class_acc = utils.get_metrics(torch.sigmoid(output).detach().cpu().numpy(), targets.detach().cpu().numpy(), ["accuracy"], is_binary)["accuracy"]
+            class_acc = utils.get_metrics(torch.sigmoid(output).detach().cpu().float().numpy(), targets.detach().cpu().float().numpy(), ["accuracy"], is_binary)["accuracy"]
         else:
             class_acc = (output.max(-1)[-1] == targets.squeeze()).float().mean()
             
@@ -177,7 +184,7 @@ def evaluate(data_loader, model, device, header='Test:', ch_names=None, metrics=
             target = target.float().unsqueeze(-1)
         
         # compute output
-        with torch.cuda.amp.autocast():
+        with torch.amp.autocast(device_type=device):
             output = model(EEG, input_chans=input_chans)
             loss = criterion(output, target)
         

@@ -212,7 +212,8 @@ def get_models(args):
 
 def get_dataset(args):
     if args.dataset == 'TUAB':
-        train_dataset, test_dataset, val_dataset = utils.prepare_TUAB_dataset("path/to/TUAB")
+        dataset_dir = Path("/Users/leon/Data/EEG-public/TAUB/TUH_Abnormal/v3.0.0/edf/processed")
+        train_dataset, test_dataset, val_dataset = utils.prepare_TUAB_dataset(dataset_dir)
         ch_names = ['EEG FP1', 'EEG FP2-REF', 'EEG F3-REF', 'EEG F4-REF', 'EEG C3-REF', 'EEG C4-REF', 'EEG P3-REF', 'EEG P4-REF', 'EEG O1-REF', 'EEG O2-REF', 'EEG F7-REF', \
                     'EEG F8-REF', 'EEG T3-REF', 'EEG T4-REF', 'EEG T5-REF', 'EEG T6-REF', 'EEG A1-REF', 'EEG A2-REF', 'EEG FZ-REF', 'EEG CZ-REF', 'EEG PZ-REF', 'EEG T1-REF', 'EEG T2-REF']
         ch_names = [name.split(' ')[-1].split('-')[0] for name in ch_names]
@@ -225,6 +226,13 @@ def get_dataset(args):
         ch_names = [name.split(' ')[-1].split('-')[0] for name in ch_names]
         args.nb_classes = 6
         metrics = ["accuracy", "balanced_accuracy", "cohen_kappa", "f1_weighted"]
+    elif args.dataset == 'HMC':
+        ch_names= ['EEG F4-M1', 'EEG C4-M1', 'EEG O2-M1', 'EEG C3-M2']
+        args.nb_classes = 5
+        metrics = ["accuracy", "balanced_accuracy", "cohen_kappa", "f1_weighted"]
+        dataset_dir = Path("/Users/leon/Data/neurolm_downstream", 'HMC')
+        train_dataset, test_dataset, val_dataset = utils.prepare_HMC_dataset(dataset_dir)
+        ch_names = [name.split(' ')[-1].split('-')[0] for name in ch_names]
     return train_dataset, test_dataset, val_dataset, ch_names, metrics
 
 
@@ -236,7 +244,7 @@ def main(args, ds_init):
 
     print(args)
 
-    device = torch.device(args.device)
+    device = torch.device(args.device) if torch.cuda.is_available() else torch.device('cpu')
 
     # fix the seed for reproducibility
     seed = args.seed + utils.get_rank()
@@ -336,7 +344,7 @@ def main(args, ds_init):
             checkpoint = torch.hub.load_state_dict_from_url(
                 args.finetune, map_location='cpu', check_hash=True)
         else:
-            checkpoint = torch.load(args.finetune, map_location='cpu')
+            checkpoint = torch.load(args.finetune, map_location='cpu', weights_only=False)
 
         print("Load ckpt from %s" % args.finetune)
         checkpoint_model = None
@@ -476,6 +484,9 @@ def main(args, ds_init):
             data_loader_train.sampler.set_epoch(epoch)
         if log_writer is not None:
             log_writer.set_step(epoch * num_training_steps_per_epoch * args.update_freq)
+            log_writer.writer.add_text('tarin', f"EPOCH {epoch}", global_step=epoch)
+        print(f"Epoch {epoch} starting ...")
+
         train_stats = train_one_epoch(
             model, criterion, data_loader_train, optimizer,
             device, epoch, loss_scaler, args.clip_grad, model_ema,
@@ -484,7 +495,7 @@ def main(args, ds_init):
             num_training_steps_per_epoch=num_training_steps_per_epoch, update_freq=args.update_freq, 
             ch_names=ch_names, is_binary=args.nb_classes == 1
         )
-        
+        print(f"Epoch {epoch} training finished.")
         if args.output_dir and args.save_ckpt:
             utils.save_model(
                 args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
