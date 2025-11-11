@@ -20,7 +20,7 @@ import os
 
 from pathlib import Path
 from collections import OrderedDict
-from timm.data.mixup import Mixup
+# from timm.data.mixup import Mixup
 from timm.models import create_model
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
 from timm.utils import ModelEma
@@ -174,6 +174,9 @@ def get_args():
     parser.add_argument('--dataset', default='TUAB', type=str,
                         help='dataset: TUAB | TUEV')
 
+    # experiment
+    parser.add_argument('--experiment', default='class_finetune', type=str)
+
     known_args, _ = parser.parse_known_args()
 
     if known_args.enable_deepspeed:
@@ -212,7 +215,7 @@ def get_models(args):
 
 def get_dataset(args):
     if args.dataset == 'TUAB':
-        dataset_dir = Path("/Users/leon/Data/EEG-public/TAUB/TUH_Abnormal/v3.0.0/edf/processed")
+        dataset_dir = Path("/home/leong/data/EEG/TAUB/TUH_Abnormal/v3.0.1/edf/processed/")
         train_dataset, test_dataset, val_dataset = utils.prepare_TUAB_dataset(dataset_dir)
         ch_names = ['EEG FP1', 'EEG FP2-REF', 'EEG F3-REF', 'EEG F4-REF', 'EEG C3-REF', 'EEG C4-REF', 'EEG P3-REF', 'EEG P4-REF', 'EEG O1-REF', 'EEG O2-REF', 'EEG F7-REF', \
                     'EEG F8-REF', 'EEG T3-REF', 'EEG T4-REF', 'EEG T5-REF', 'EEG T6-REF', 'EEG A1-REF', 'EEG A2-REF', 'EEG FZ-REF', 'EEG CZ-REF', 'EEG PZ-REF', 'EEG T1-REF', 'EEG T2-REF']
@@ -245,7 +248,6 @@ def main(args, ds_init):
     print(args)
 
     device = torch.device(args.device) if torch.cuda.is_available() else torch.device('cpu')
-
     # fix the seed for reproducibility
     seed = args.seed + utils.get_rank()
     torch.manual_seed(seed)
@@ -292,7 +294,7 @@ def main(args, ds_init):
 
     if global_rank == 0 and args.log_dir is not None:
         os.makedirs(args.log_dir, exist_ok=True)
-        log_writer = utils.TensorboardLogger(log_dir=args.log_dir)
+        log_writer = utils.TensorboardLogger(log_dir=args.log_dir, experiment=args.experiment)
     else:
         log_writer = None
 
@@ -342,9 +344,9 @@ def main(args, ds_init):
     if args.finetune:
         if args.finetune.startswith('https'):
             checkpoint = torch.hub.load_state_dict_from_url(
-                args.finetune, map_location='cpu', check_hash=True)
+                args.finetune, map_location=device, check_hash=True)
         else:
-            checkpoint = torch.load(args.finetune, map_location='cpu', weights_only=False)
+            checkpoint = torch.load(args.finetune, map_location=device, weights_only=False)
 
         print("Load ckpt from %s" % args.finetune)
         checkpoint_model = None
@@ -466,10 +468,17 @@ def main(args, ds_init):
         optimizer=optimizer, loss_scaler=loss_scaler, model_ema=model_ema)
             
     if args.eval:
+        print("Start evaluating for starting...")
         balanced_accuracy = []
         accuracy = []
-        for data_loader in data_loader_test:
-            test_stats = evaluate(data_loader, model, device, header='Test:', ch_names=ch_names, metrics=metrics, is_binary=(args.nb_classes == 1))
+        if type(dataset_test) == list:
+            for data_loader in data_loader_test:
+                test_stats = evaluate(data_loader, model, device, header='Test:', ch_names=ch_names, metrics=metrics, is_binary=(args.nb_classes == 1))
+                accuracy.append(test_stats['accuracy'])
+                balanced_accuracy.append(test_stats['balanced_accuracy'])
+        else:
+            test_stats = evaluate(data_loader_test, model, device, header='Test:', ch_names=ch_names, metrics=metrics,
+                                  is_binary=(args.nb_classes == 1))
             accuracy.append(test_stats['accuracy'])
             balanced_accuracy.append(test_stats['balanced_accuracy'])
         print(f"======Accuracy: {np.mean(accuracy)} {np.std(accuracy)}, balanced accuracy: {np.mean(balanced_accuracy)} {np.std(balanced_accuracy)}")
