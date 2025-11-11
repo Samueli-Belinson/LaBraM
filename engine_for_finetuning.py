@@ -9,7 +9,7 @@
 # ---------------------------------------------------------
 import math
 import sys
-from typing import Iterable, Optional
+from typing import Iterable, Optional, List
 import torch
 from timm.utils import ModelEma
 import utils
@@ -27,8 +27,10 @@ def get_loss_scale_for_deepspeed(model):
     return optimizer.loss_scale if hasattr(optimizer, "loss_scale") else optimizer.cur_scale
 
 
-def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
-                    data_loader: Iterable, optimizer: torch.optim.Optimizer,
+def train_one_epoch(model: torch.nn.Module,
+                    criterion: torch.nn.Module,
+                    data_loader: torch.utils.data.DataLoader,
+                    optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler, max_norm: float = 0,
                     model_ema: Optional[ModelEma] = None, log_writer=None,
                     start_steps=None, lr_schedule_values=None, wd_schedule_values=None,
@@ -158,7 +160,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
 @torch.no_grad()
-def evaluate(data_loader, model, device, header='Test:', ch_names=None, metrics=['acc'], is_binary=True):
+def evaluate(data_loader: torch.utils.data.DataLoader,
+             model: torch.nn.Module,
+             device: torch.device,
+             header: str='Test:',
+             ch_names: Optional[List[str]]=None,
+             metrics: Optional[List[str]]=None,
+             is_binary=True):
+    if metrics is None:
+        metrics = ['acc']
     input_chans = None
     if ch_names is not None:
         input_chans = utils.get_input_chans(ch_names)
@@ -174,7 +184,10 @@ def evaluate(data_loader, model, device, header='Test:', ch_names=None, metrics=
     model.eval()
     pred = []
     true = []
-    for step, batch in enumerate(metric_logger.log_every(data_loader, 10, header)):
+    print(f"Run eval in mode {header}...")
+    for step, batch in tqdm(enumerate(metric_logger.log_every(data_loader, 10, header)),
+                            total=len(data_loader),
+                            desc=f"Eval-{header}"):
         EEG = batch[0]
         target = batch[-1]
         EEG = EEG.float().to(device, non_blocking=True) / 100
@@ -184,7 +197,7 @@ def evaluate(data_loader, model, device, header='Test:', ch_names=None, metrics=
             target = target.float().unsqueeze(-1)
         
         # compute output
-        with torch.amp.autocast(device_type=device):
+        with torch.amp.autocast(device_type=device.type):
             output = model(EEG, input_chans=input_chans)
             loss = criterion(output, target)
         
