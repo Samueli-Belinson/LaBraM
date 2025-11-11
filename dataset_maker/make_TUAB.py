@@ -6,7 +6,7 @@
 # --------------------------------------------------------
 import os
 import pickle
-
+from functools import partial
 from multiprocessing import Pool
 import numpy as np
 import mne
@@ -42,8 +42,20 @@ standard_channels = [
 ]
 
 
-def split_and_dump(params):
-    fetch_folder, sub, dump_folder, label = params
+def split_and_dump(data_chunk, config: dict = None):
+    fetch_folder, sub, dump_folder, label = data_chunk
+    # config = {"l_freq": 0.1, "h_freq": 75.0, "sec_sample": 200, "notch_filter_freq": 50.0,
+    #           "len_seq_sec": 10, "n_jobs": 5}
+    l_freq = config["l_freq"]
+    h_freq = config["h_freq"]
+    sec_sample = config["sec_sample"]
+    notch_filter_freq = config["notch_filter_freq"]
+    len_seq_sec = config["len_seq_sec"]
+    n_jobs_sample = config["n_jobs"]
+    units = config["units"]
+    seq_len = int(len_seq_sec * sec_sample)
+
+
     for file in os.listdir(fetch_folder):
         if sub in file:
             print("process", file)
@@ -61,23 +73,23 @@ def split_and_dump(params):
                 if raw.ch_names != chOrder_standard:
                     raise Exception("channel order is wrong!")
 
-                raw.filter(l_freq=0.1, h_freq=75.0)
-                raw.notch_filter(50.0)
-                raw.resample(200, n_jobs=5)
+                raw.filter(l_freq=l_freq, h_freq=h_freq)
+                raw.notch_filter(notch_filter_freq)
+                raw.resample(sec_sample, n_jobs=n_jobs_sample)
 
                 ch_name = raw.ch_names
-                raw_data = raw.get_data(units='uV')
+                raw_data = raw.get_data(units=units)
                 channeled_data = raw_data.copy()
             except:
                 with open("tuab-process-error-files.txt", "a") as f:
                     f.write(file + "\n")
                 continue
-            for i in range(channeled_data.shape[1] // 2000):
+            for i in range(channeled_data.shape[1] // seq_len):
                 dump_path = os.path.join(
                     dump_folder, file.split(".")[0] + "_" + str(i) + ".pkl"
                 )
                 pickle.dump(
-                    {"X": channeled_data[:, i * 2000 : (i + 1) * 2000], "y": label},
+                    {"X": channeled_data[:, i * seq_len : (i + 1) * seq_len], "y": label},
                     open(dump_path, "wb"),
                 )
 
@@ -89,6 +101,18 @@ if __name__ == "__main__":
     # root to abnormal dataset
     root = "/Users/leon/Data/EEG-public/TAUB/TUH_Abnormal/v3.0.0/edf/"
     channel_std = "01_tcp_ar"
+    out_name = "processed"
+    ## l_freq=0.1, h_freq=75.0
+    config = {"l_freq": 0.1,
+              "h_freq": 75.0,
+              "sec_sample": 200,
+              "notch_filter_freq": 50.0,
+              "len_seq_sec": 10,
+              "n_jobs": 5,
+              "units": 'uV'}
+
+    n_jobs = 24
+    out_dir = os.path.join(root, out_name)
 
     # train, val abnormal subjects
     train_val_abnormal = os.path.join(root, "train", "abnormal", channel_std)
@@ -121,37 +145,41 @@ if __name__ == "__main__":
     test_n_sub = list(set([item.split("_")[0] for item in os.listdir(test_normal)]))
 
     # create the train, val, test sample folder
-    if not os.path.exists(os.path.join(root, "processed")):
-        os.makedirs(os.path.join(root, "processed"))
+    os.makedirs(out_dir, exist_ok=True)
 
-    if not os.path.exists(os.path.join(root, "processed", "train")):
-        os.makedirs(os.path.join(root, "processed", "train"))
-    train_dump_folder = os.path.join(root, "processed", "train")
+    # if not os.path.exists(os.path.join(root, "processed", "train")):
+    #     os.makedirs(os.path.join(root, "processed", "train"))
+    train_dump_folder = os.path.join(out_dir, "train")
+    os.makedirs(train_dump_folder, exist_ok=True)
 
-    if not os.path.exists(os.path.join(root, "processed", "val")):
-        os.makedirs(os.path.join(root, "processed", "val"))
-    val_dump_folder = os.path.join(root, "processed", "val")
-
-    if not os.path.exists(os.path.join(root, "processed", "test")):
-        os.makedirs(os.path.join(root, "processed", "test"))
-    test_dump_folder = os.path.join(root, "processed", "test")
+    # if not os.path.exists(os.path.join(root, "processed", "val")):
+    #     os.makedirs(os.path.join(root, "processed", "val"))
+    val_dump_folder = os.path.join(out_dir, "val")
+    os.makedirs(val_dump_folder, exist_ok=True)
+    #
+    # if not os.path.exists(os.path.join(root, "processed", "test")):
+    #     os.makedirs(os.path.join(root, "processed", "test"))
+    test_dump_folder = os.path.join(out_dir, "test")
+    os.makedirs(test_dump_folder, exist_ok=True)
 
     # fetch_folder, sub, dump_folder, labels
-    parameters = []
+    #fetch_folder, sub, dump_folder, label = params
+    data_chunks = []
     for train_sub in train_a_sub:
-        parameters.append([train_val_abnormal, train_sub, train_dump_folder, 1])
+        data_chunks.append([train_val_abnormal, train_sub, train_dump_folder, 1])
     for train_sub in train_n_sub:
-        parameters.append([train_val_normal, train_sub, train_dump_folder, 0])
+        data_chunks.append([train_val_normal, train_sub, train_dump_folder, 0])
     for val_sub in val_a_sub:
-        parameters.append([train_val_abnormal, val_sub, val_dump_folder, 1])
+        data_chunks.append([train_val_abnormal, val_sub, val_dump_folder, 1])
     for val_sub in val_n_sub:
-        parameters.append([train_val_normal, val_sub, val_dump_folder, 0])
+        data_chunks.append([train_val_normal, val_sub, val_dump_folder, 0])
     for test_sub in test_a_sub:
-        parameters.append([test_abnormal, test_sub, test_dump_folder, 1])
+        data_chunks.append([test_abnormal, test_sub, test_dump_folder, 1])
     for test_sub in test_n_sub:
-        parameters.append([test_normal, test_sub, test_dump_folder, 0])
+        data_chunks.append([test_normal, test_sub, test_dump_folder, 0])
+
 
     # split and dump in parallel
-    with Pool(processes=24) as pool:
+    with Pool(processes=n_jobs) as pool:
         # Use the pool.map function to apply the square function to each element in the numbers list
-        result = pool.map(split_and_dump, parameters)
+        result = pool.map(partial(split_and_dump, config=config), data_chunks)
