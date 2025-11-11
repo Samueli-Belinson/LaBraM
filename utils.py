@@ -231,8 +231,12 @@ class MetricLogger(object):
 
 
 class TensorboardLogger(object):
-    def __init__(self, log_dir):
-        self.writer = SummaryWriter(logdir=log_dir)
+    def __init__(self, log_dir, experiment: str = None):
+        time_stamp = f"{time.strftime('%Y%m%d-%H%M%S')}"
+        if experiment is not None:
+            run_name = f"{experiment}_{time_stamp}"
+        run_loc = Path(log_dir, run_name)
+        self.writer = SummaryWriter(logdir=str(run_loc))
         self.step = 0
 
     def set_step(self, step=None):
@@ -637,9 +641,9 @@ def auto_load_model(args, model, model_without_ddp, optimizer, loss_scaler, mode
         if args.resume:
             if args.resume.startswith('https'):
                 checkpoint = torch.hub.load_state_dict_from_url(
-                    args.resume, map_location='cpu', check_hash=True)
+                    args.resume, weights_only=False, check_hash=True)
             else:
-                checkpoint = torch.load(args.resume, map_location='cpu')
+                checkpoint = torch.load(args.resume, weights_only=False)
             model_without_ddp.load_state_dict(checkpoint['model']) # strict: bool=True, , strict=False
             print("Resume checkpoint %s" % args.resume)
             if 'optimizer' in checkpoint and 'epoch' in checkpoint:
