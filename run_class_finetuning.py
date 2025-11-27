@@ -72,6 +72,8 @@ def get_args():
     parser.add_argument('--model_ema', action='store_true', default=False)
     parser.add_argument('--model_ema_decay', type=float, default=0.9999, help='')
     parser.add_argument('--model_ema_force_cpu', action='store_true', default=False, help='')
+    parser.add_argument('--classifier_type', default='linear', type=str, metavar='CLASSIFIER_HEAD',
+                        help='Type of classification head to use linear/MLP(3 layers) (default: "linear")')
 
     # Optimizer parameters
     parser.add_argument('--opt', default='adamw', type=str, metavar='OPTIMIZER',
@@ -126,7 +128,7 @@ def get_args():
     parser.add_argument('--init_scale', default=0.001, type=float)
     parser.add_argument('--use_mean_pooling', action='store_true')
     parser.set_defaults(use_mean_pooling=True)
-    parser.add_argument('--use_cls', action='store_false', dest='use_mean_pooling')
+    parser.add_argument('--use_cls', action='store_false', dest='use mean pooling or cls token')
     parser.add_argument('--disable_weight_decay_on_rel_pos_bias', action='store_true', default=False)
 
     # Dataset parameters
@@ -208,7 +210,8 @@ def get_models(args):
         use_abs_pos_emb=args.abs_pos_emb,
         init_values=args.layer_scale_init_value,
         qkv_bias=args.qkv_bias,
-    )
+        classifier_type=args.classifier_type)
+
 
     return model
 
@@ -437,10 +440,15 @@ def main(args, ds_init):
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
             model_without_ddp = model.module
 
+        blocks_filter = [f"blocks.{i}." for i in range(num_layers-1)]
+        filter_opt =  ["cls_token", "embed"] + blocks_filter
         optimizer = create_optimizer(
-            args, model_without_ddp, skip_list=skip_weight_decay_list,
+            args, model_without_ddp,
+            skip_list=skip_weight_decay_list,
             get_num_layer=assigner.get_layer_id if assigner is not None else None, 
-            get_layer_scale=assigner.get_scale if assigner is not None else None)
+            get_layer_scale=assigner.get_scale if assigner is not None else None,
+           filter_name=filter_opt
+        )
         loss_scaler = NativeScaler()
 
     print("Use step level LR scheduler!")

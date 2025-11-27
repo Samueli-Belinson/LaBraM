@@ -67,6 +67,7 @@ def get_parameter_groups(model, weight_decay=1e-5, skip_list=(), get_num_layer=N
                 if filter_n in name:
                     print(f"filter {name} because of the pattern {filter_n}")
                     flag = True
+                    param.requires_grad = False
             if flag:
                 continue
         if param.ndim <= 1 or name.endswith(".bias") or name in skip_list: # param.ndim <= 1 len(param.shape) == 1

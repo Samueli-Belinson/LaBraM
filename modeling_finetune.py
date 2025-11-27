@@ -62,6 +62,40 @@ class Mlp(nn.Module):
         x = self.drop(x)
         return x
 
+class FcBlock(nn.Module):
+    def __init__(self, in_features, out_features, act_layer=nn.GELU, drop=0.):
+        super().__init__()
+        self.fc = nn.Linear(in_features, out_features)
+        self.act = act_layer() if act_layer is not None else nn.Identity()
+        self.drop = nn.Dropout(drop) if drop > 0. else nn.Identity()
+        trunc_normal_(self.fc.weight, std=.02)
+
+    def forward(self, x):
+        x = self.fc(x)
+        x = self.act(x)
+        x = self.drop(x)
+        return x
+
+class MlpClassifier(nn.Module):
+    def __init__(self, in_features,
+                 act_layer=nn.GELU,
+                 num_classes=1,
+                 depth=3,
+                 drop=0.,
+                 layer_ratio=0.5):
+        super().__init__()
+        self.fc_blocks = []
+        in_dim = in_features
+        for _ in range(depth):
+            out_dim = int(in_dim * layer_ratio)
+            self.fc_blocks.append(FcBlock(in_dim, out_dim, act_layer=act_layer, drop=drop))
+            in_dim = out_dim
+        self.fc_out = nn.Linear(in_dim, num_classes)
+
+    def forward(self, x):
+        for fc in self.fc_blocks:
+            x = fc(x)
+        return self.fc_out(x)
 
 class Attention(nn.Module):
     def __init__(
@@ -261,15 +295,22 @@ class TemporalConv(nn.Module):
 
 
 class NeuralTransformer(nn.Module):
-    def __init__(self, EEG_size=1600, patch_size=200, in_chans=1, out_chans=8, num_classes=1000, embed_dim=200, depth=12,
-                 num_heads=10, mlp_ratio=4., qkv_bias=False, qk_norm=None, qk_scale=None, drop_rate=0., attn_drop_rate=0.,
+    def __init__(self,
+                 EEG_size=1600,
+                 patch_size=200,
+                 in_chans=1, out_chans=8,
+                 num_classes=1000, embed_dim=200, depth=12,
+                 num_heads=10, mlp_ratio=4., qkv_bias=False, qk_norm=None, qk_scale=None,
+                 drop_rate=0., attn_drop_rate=0.,
                  drop_path_rate=0., norm_layer=nn.LayerNorm, init_values=None,
                  use_abs_pos_emb=True, use_rel_pos_bias=False, use_shared_rel_pos_bias=False,
-                 use_mean_pooling=True, init_scale=0.001, **kwargs):
+                 use_mean_pooling=True, init_scale=0.001,
+                 classifier_type='linear',
+                 **kwargs):
         super().__init__()
         self.num_classes = num_classes
         self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
-
+        self.use_mean_pooling = use_mean_pooling
         # To identify whether it is neural tokenizer or neural decoder. 
         # For the neural decoder, use linear projection (PatchEmbed) to project codebook dimension to hidden dimension.
         # Otherwise, use TemporalConv to extract temporal features from EEG signals.
@@ -298,7 +339,15 @@ class NeuralTransformer(nn.Module):
             for i in range(depth)])
         self.norm = nn.Identity() if use_mean_pooling else norm_layer(embed_dim)
         self.fc_norm = norm_layer(embed_dim) if use_mean_pooling else None
-        self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+
+        if num_classes == 0:
+            self.head = nn.Identity()
+        elif classifier_type == 'linear':
+            self.head = nn.Linear(embed_dim, num_classes)
+        elif classifier_type == 'mlp':
+            self.head = MlpClassifier(embed_dim, act_layer=nn.GELU, num_classes=num_classes, drop=drop_rate)
+        else:
+            raise ValueError(f'Invalid classifier type: {classifier_type}')
 
         if self.pos_embed is not None:
             trunc_normal_(self.pos_embed, std=.02)
@@ -392,7 +441,12 @@ class NeuralTransformer(nn.Module):
         x: [batch size, number of electrodes, number of patches, patch size]
         For example, for an EEG sample of 4 seconds with 64 electrodes, x will be [batch size, 64, 4, 200]
         '''
-        x = self.forward_features(x, input_chans=input_chans, return_patch_tokens=return_patch_tokens, return_all_tokens=return_all_tokens, **kwargs)
+        if self.use_mean_pooling:
+            return_patch_tokens = False
+        x = self.forward_features(x,
+                                  input_chans=input_chans,
+                                  return_patch_tokens=return_patch_tokens,
+                                  return_all_tokens=return_all_tokens, **kwargs)
         x = self.head(x)
         return x
 
@@ -466,7 +520,8 @@ class NeuralTransformer(nn.Module):
 @register_model
 def labram_base_patch200_200(pretrained=False, **kwargs):
     model = NeuralTransformer(
-        patch_size=200, embed_dim=200, depth=12, num_heads=10, mlp_ratio=4, qk_norm=partial(nn.LayerNorm, eps=1e-6), # qkv_bias=True,
+        patch_size=200, embed_dim=200, depth=12, num_heads=10, mlp_ratio=4,
+        qk_norm=partial(nn.LayerNorm, eps=1e-6), # qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     model.default_cfg = _cfg()
     return model
