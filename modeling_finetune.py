@@ -84,16 +84,17 @@ class MlpClassifier(nn.Module):
                  drop=0.,
                  layer_ratio=0.5):
         super().__init__()
-        self.fc_blocks = []
+        self.blocks_fc = []
         in_dim = in_features
         for _ in range(depth):
             out_dim = int(in_dim * layer_ratio)
-            self.fc_blocks.append(FcBlock(in_dim, out_dim, act_layer=act_layer, drop=drop))
+            self.blocks_fc.append(FcBlock(in_dim, out_dim, act_layer=act_layer, drop=drop))
             in_dim = out_dim
+        self.blocks_fc = nn.ModuleList(self.blocks_fc)
         self.fc_out = nn.Linear(in_dim, num_classes)
 
     def forward(self, x):
-        for fc in self.fc_blocks:
+        for fc in self.blocks_fc:
             x = fc(x)
         return self.fc_out(x)
 
