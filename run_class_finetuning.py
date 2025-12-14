@@ -24,6 +24,8 @@ from collections import OrderedDict
 from timm.models import create_model
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
 from timm.utils import ModelEma
+from torch.cuda import use_mem_pool
+
 from optim_factory import create_optimizer, get_parameter_groups, LayerDecayValueAssigner
 
 from engine_for_finetuning import train_one_epoch, evaluate
@@ -120,6 +122,8 @@ def get_args():
                         help='Do not random erase first (clean) augmentation split')
 
     # * Finetuning params
+    parser.add_argument('--use_cls', action='store_true', help='use mean pooling or cls token', default=False)
+    # parser.set_defaults(use_cls=True)
     parser.add_argument('--finetune', default='',
                         help='finetune from checkpoint')
     parser.add_argument('--model_key', default='model|module', type=str)
@@ -128,8 +132,8 @@ def get_args():
     parser.add_argument('--init_scale', default=0.001, type=float)
     parser.add_argument('--use_mean_pooling', action='store_true')
     parser.set_defaults(use_mean_pooling=True)
-    parser.add_argument('--use_cls', action='store_false', dest='use mean pooling or cls token')
-    parser.add_argument('--disable_weight_decay_on_rel_pos_bias', action='store_true', default=False)
+
+    parser.add_argument('--disable_weight_decay_on_rel_pos_bias', action='store_true')
 
     # Dataset parameters
     parser.add_argument('--nb_classes', default=0, type=int,
@@ -141,7 +145,7 @@ def get_args():
                         help='path where to tensorboard log')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
-    parser.add_argument('--seed', default=0, type=int)
+    parser.add_argument('--seed', default=1984, type=int)
     parser.add_argument('--resume', default='',
                         help='resume from checkpoint')
     parser.add_argument('--auto_resume', action='store_true')
@@ -179,7 +183,7 @@ def get_args():
     # experiment
     parser.add_argument('--experiment', default='class_finetune', type=str)
 
-    known_args, _ = parser.parse_known_args()
+    known_args, args_ = parser.parse_known_args()
 
     if known_args.enable_deepspeed:
         try:
@@ -196,6 +200,7 @@ def get_args():
     return parser.parse_args(), ds_init
 
 def get_models(args):
+    use_mem_pooling = args.use_mean_pooling if not args.use_cls else False
     model = create_model(
         args.model,
         pretrained=False,
@@ -204,7 +209,7 @@ def get_models(args):
         drop_path_rate=args.drop_path,
         attn_drop_rate=args.attn_drop_rate,
         drop_block_rate=None,
-        use_mean_pooling=args.use_mean_pooling,
+        use_mean_pooling=use_mem_pooling,
         init_scale=args.init_scale,
         use_rel_pos_bias=args.rel_pos_bias,
         use_abs_pos_emb=args.abs_pos_emb,
@@ -239,6 +244,30 @@ def get_dataset(args):
         dataset_dir = Path("/Users/leon/Data/neurolm_downstream", 'HMC')
         train_dataset, test_dataset, val_dataset = utils.prepare_HMC_dataset(dataset_dir)
         ch_names = [name.split(' ')[-1].split('-')[0] for name in ch_names]
+    elif args.dataset == 'INTERNAL':
+        args.nb_classes = 1 #3
+        is_normal_abnormal = True
+        dataset_dir = Path("/home/leong/data/EEG/INTER_DATA/EpilepticEEG_processed_10sec")
+        metadata_path = Path("/home/leong/data/EEG/INTER_DATA/EpilepticEEG/epileptic_labels.csv")
+        label_names = ['is_normal', 'is_epileptiform', 'is_gen_slowing']
+        ch_names = ['FP1', 'FP2', 'F3', 'F4', 'C3', 'C4', 'P3', 'P4', 'O1', 'O2', 'F7',
+                 'F8', 'T3', 'T4', 'T5', 'T6', 'A1', 'A2', 'FZ', 'CZ', 'PZ', 'T1', 'T2']
+        # metrics = ["accuracy", "balanced_accuracy", "cohen_kappa", "f1_weighted"]
+        # - f1: f1
+        # score
+        # - precision: precision
+        # score
+        # - recall: recall
+        # score
+        metrics = ["pr_auc", "roc_auc", "accuracy", "balanced_accuracy", "f1", "recall", "precision"] # binary classification
+        train_dataset, test_dataset, val_dataset = utils.prepare_internal_dataset(root_path=dataset_dir,
+                                                                                  seed=args.seed,
+                                                                                  is_normal_abnormal=is_normal_abnormal,
+                                                                                  class_labels=label_names,
+                                                                                  metadata_csv_path=metadata_path)
+    else:
+        raise ValueError("Unknown dataset: %s" % args.dataset)
+
     return train_dataset, test_dataset, val_dataset, ch_names, metrics
 
 
@@ -440,7 +469,7 @@ def main(args, ds_init):
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
             model_without_ddp = model.module
 
-        blocks_filter = [f"blocks.{i}." for i in range(num_layers-1)]
+        blocks_filter = [f"blocks.{i}." for i in range(num_layers)]
         filter_opt =  ["cls_token", "embed"] + blocks_filter
         optimizer = create_optimizer(
             args, model_without_ddp,
