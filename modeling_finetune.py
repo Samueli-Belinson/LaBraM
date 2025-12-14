@@ -159,7 +159,7 @@ class Attention(nn.Module):
         self.proj = nn.Linear(all_head_dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x, rel_pos_bias=None, return_attention=False, return_qkv=False):
+    def forward(self, x, rel_pos_bias=None, return_attention=False, return_qkv=False, global_att_only= False):
         B, N, C = x.shape
         qkv_bias = None
         if self.q_bias is not None:
@@ -172,6 +172,34 @@ class Attention(nn.Module):
             q = self.q_norm(q).type_as(v)
         if self.k_norm is not None:
             k = self.k_norm(k).type_as(v)
+
+        if global_att_only:
+            q_cls = q[:, :, :1, :] * self.scale  # (B, H, 1, C_head)
+            attn = q_cls @ k.transpose(-2, -1)  # (B, H, 1, N)
+            if self.relative_position_bias_table is not None:
+                relative_position_bias = \
+                    self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+                        self.window_size[0] * self.window_size[1] + 1,
+                        self.window_size[0] * self.window_size[1] + 1, -1)  # (N, N, H)
+                relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # (H, N, N)
+                attn = attn + relative_position_bias.unsqueeze(0)[:, :, :1, :]
+            if rel_pos_bias is not None:
+                attn = attn + rel_pos_bias.unsqueeze(0)[:, :, :1, :]
+
+            attn = attn.softmax(dim=-1)
+            attn = self.attn_drop(attn)
+
+            if return_attention:
+                return attn
+
+            cls_out = (attn @ v).transpose(1, 2).reshape(B, 1, -1)
+            cls_out = self.proj(cls_out)
+            cls_out = self.proj_drop(cls_out)
+            x = torch.cat([cls_out, x[:, 1:, :]], dim=1)
+
+            if return_qkv:
+                return x, qkv
+            return x
 
         q = q * self.scale
         attn = (q @ k.transpose(-2, -1))
@@ -226,11 +254,17 @@ class Block(nn.Module):
         else:
             self.gamma_1, self.gamma_2 = None, None
 
-    def forward(self, x, rel_pos_bias=None, return_attention=False, return_qkv=False):
+    def forward(self, x, rel_pos_bias=None, return_attention=False, return_qkv=False, global_att_only=False):
         if return_attention:
-            return self.attn(self.norm1(x), rel_pos_bias=rel_pos_bias, return_attention=True)
+            return self.attn(self.norm1(x),
+                             rel_pos_bias=rel_pos_bias,
+                             return_attention=True,
+                             global_att_only=global_att_only)
         if return_qkv:
-            y, qkv = self.attn(self.norm1(x), rel_pos_bias=rel_pos_bias, return_qkv=return_qkv)
+            y, qkv = self.attn(self.norm1(x),
+                               rel_pos_bias=rel_pos_bias,
+                               return_qkv=return_qkv,
+                               global_att_only=global_att_only)
             x = x + self.drop_path(self.gamma_1 * y)
             x = x + self.drop_path(self.gamma_2 * self.mlp(self.norm2(x)))
             return x, qkv
@@ -396,7 +430,11 @@ class NeuralTransformer(nn.Module):
         self.num_classes = num_classes
         self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
-    def forward_features(self, x, input_chans=None, return_patch_tokens=False, return_all_tokens=False, **kwargs):
+    def forward_features(self, x,
+                         input_chans=None,
+                         return_patch_tokens=False,
+                         return_all_tokens=False,
+                         is_last_global_att=False, **kwargs):
         batch_size, n, a, t = x.shape
         input_time_window = a if t == self.patch_size else t
         x = self.patch_embed(x)
@@ -417,8 +455,11 @@ class NeuralTransformer(nn.Module):
 
         x = self.pos_drop(x)
         
-        for blk in self.blocks:
+        for blk in self.blocks[:-1]:
             x = blk(x, rel_pos_bias=None)
+
+        x = self.blocks[-1](x, rel_pos_bias=None, global_att_only=is_last_global_att)
+
         
         x = self.norm(x)
         if self.fc_norm is not None:
