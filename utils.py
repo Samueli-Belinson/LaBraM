@@ -15,11 +15,15 @@ import math
 import time
 import json
 import glob
+from typing import Optional, List, Callable, Dict, Any, Union, Tuple
 from collections import defaultdict, deque
 import datetime
+from warnings import warn
+# from email.charset import DEFAULT_CHARSET
+
 import numpy as np
 from timm.utils import get_state_dict
-
+from sklearn.model_selection import train_test_split
 from pathlib import Path
 import argparse
 
@@ -57,7 +61,9 @@ standard_1020 = [
     "FP1-F7", "F7-T7", "T7-P7", "P7-O1", "FP2-F8", "F8-T8", "T8-P8", "P8-O2", "FP1-F3", "F3-C3", "C3-P3", "P3-O1", "FP2-F4", "F4-C4", "C4-P4", "P4-O2"
 ]
 
-
+DEFAULT_SAMPLING_RATE = 200
+MIN_DATA_LENGTH = 100
+MIN_LEN_SEC = 10*60
 def get_chans(ch_names):
     chans = []
     for ch_name in ch_names:
@@ -832,9 +838,91 @@ class HMCLoader(torch.utils.data.Dataset):
         # Y_text[prompt_len - 1:valid_text_len - 1] = text[prompt_len:valid_text_len]
         # return X_eeg, text, Y_text, input_chans, input_time, eeg_mask.bool(), gpt_mask.bool()
 
+class InternalDataset(torch.utils.data.Dataset):
+    def __init__(self,
+                 ds_path: str,
+                 metadata_csv_path: str,
+                 class_labels: list,
+                 is_normal_abnormal: bool = False, ## class_labels[0] must be normal class label
+                 len_in_sec: int=10,
+                 is_random: bool = False):
+        self.root = ds_path
+        self.is_normal_abnormal = is_normal_abnormal
+        eeg_np_files=  list(Path(self.root).glob("*.npy"))
+        self.metadata_df: pd.DataFrame = pd.read_csv(metadata_csv_path)
+        if not set(class_labels).issubset(self.metadata_df.columns):
+            raise ValueError(f"Metadata CSV is missing required columns: {set(class_labels) - set(self.metadata_df.columns)}")
+        self.metadata_df['class_label'] = np.argmax(self.metadata_df[class_labels], 1)
+        if is_normal_abnormal:
+            self.metadata_df['class_label'] = self.metadata_df['class_label'] == 0
+        else:
+            self.metadata_df = self.metadata_df[(self.metadata_df[class_labels].sum(1) == 1.0)]
+
+        id_keys = list(map(lambda x: x.stem.split("_")[0], eeg_np_files))
+        ids_unique = np.unique(id_keys, return_counts=False)
+        self.eeg_files_df: pd.DataFrame = pd.DataFrame({"id_key": id_keys, "eeg_np_file": eeg_np_files}).set_index("id_key")
+        self.metadata_df['id_key'] = self.metadata_df['filename_hashed'].apply(lambda x: x.split("_")[0])
+        self.metadata_df = self.metadata_df.set_index("id_key")
+        ids_common = self.metadata_df.index.intersection(ids_unique)
+        self.metadata_df = self.metadata_df.loc[ids_common]
+        self.eeg_files_df = self.eeg_files_df.loc[ids_common]
+        # self.metadata_df = self.metadata_df.merge(eeg_files_df, left_index=True, right_index=True, how="inner")
+
+        if self.metadata_df.shape[0] < MIN_DATA_LENGTH:
+            raise ValueError(f"Metadata CSV contains less than {MIN_DATA_LENGTH} rows.")
+
+        # self.metadata_df['length_sec'] = list(map(lambda x: np.load(x).shape[1] / DEFAULT_SAMPLING_RATE,
+        #                                           self.metadata_df['eeg_np_file']))
+        self.default_rate = DEFAULT_SAMPLING_RATE
+
+        self.len_sampling = len_in_sec * DEFAULT_SAMPLING_RATE
+        self.is_random = is_random
+        self.class_labels = class_labels
+        self.n_classes = len(self.class_labels)
+
+    def __len__(self):
+        return self.eeg_files_df.shape[0] #self.metadata_df.shape[0]
+
+    def get_n_keys(self)->int:
+        return self.eeg_files_df.shape[0]
+
+    def get_id_keys(self)->List[str]:
+        return self.metadata_df.index.tolist()
+
+    def get_subset(self, id_keys: List[str]) -> torch.utils.data.Subset:
+        file_ids = np.nonzero(self.eeg_files_df.index.isin(id_keys))[0]
+        return torch.utils.data.Subset(self, file_ids)
+
+    def __getitem__(self, index: Union[int, List[int]]):
+        # ind_id = index if isinstance(index, int) else index[0]
+        # file_idn = self.metadata_df.iloc[ind_id].name
+        file_info = self.eeg_files_df.iloc[index]
+        file_idn = file_info.name
+        file_eeg_path = file_info['eeg_np_file']
+        row_ind = self.metadata_df.loc[file_idn]
+        # file_eeg_path = row_ind['eeg_np_file']
+        data_eeg = np.load(file_eeg_path)
+        if self.is_random:
+            start_idx = np.random.randint(0, data_eeg.shape[0] - self.len_sampling)
+            raise NotImplementedError
+        elif isinstance(index, list):
+            start_idx = index[1]
+            raise NotImplementedError
+        else:
+            start_idx = 0
+        if data_eeg.shape[1] > self.len_sampling:
+            len_sec = data_eeg.shape[1] / DEFAULT_SAMPLING_RATE
+            warn(f"EEG file {file_eeg_path} is longer than {len_sec} seconds.")
+            data_eeg = data_eeg[:, start_idx:start_idx + self.len_sampling]
+        X = torch.FloatTensor(data_eeg)
+        # X = torch.FloatTensor(data_eeg[:, start_idx:start_idx+self.len_sampling])
+        # Y = torch.FloatTensor(self.metadata_df.loc[file_idn]['class_label'].values.astype(np.float_))
+        Y  = row_ind['class_label'].astype(np.int_)
+        return X, Y
+
 
 class TUABLoader(torch.utils.data.Dataset):
-    def __init__(self, root, files, sampling_rate=200):
+    def __init__(self, root, files, sampling_rate=DEFAULT_SAMPLING_RATE):
         self.root = root
         self.files = files
         self.default_rate = 200
@@ -930,6 +1018,44 @@ def prepare_TUAB_dataset(root):
     val_dataset = TUABLoader(os.path.join(root, "val"), val_files)
     print(len(train_files), len(val_files), len(test_files))
     return train_dataset, test_dataset, val_dataset
+
+def prepare_internal_dataset(root_path: Path,
+                             class_labels: List[str],
+                             is_normal_abnormal: bool = False,
+                             metadata_csv_path: Optional[str] = None,
+                             data_split: List[float]=None,
+                             seed: int =4523) -> Tuple[torch.utils.data.Dataset,
+                                                       torch.utils.data.Dataset,
+                                                       torch.utils.data.Dataset]:
+    if data_split is None:
+        data_split = [0.8, 0.1, 0.1]
+    assert sum(data_split) == 1.0, "data_split must sum to 1.0"
+    assert len(data_split) == 3, "data_split must have 3 elements: train, val, test"
+
+    metadata_csv_path = os.path.join(root_path, "metadata.csv") if metadata_csv_path is None else metadata_csv_path
+    assert os.path.isfile(metadata_csv_path), f"metadata_csv_path {metadata_csv_path} does not exist"
+    assert os.path.isdir(root_path), f"root_path {root_path} is not a directory"
+    eeg_dataset = InternalDataset(root_path,
+                                  is_normal_abnormal=is_normal_abnormal,
+                                  metadata_csv_path=metadata_csv_path,
+                                  class_labels=class_labels)
+    assert len(eeg_dataset) > MIN_DATA_LENGTH, f"No data found in {root_path}"
+    id_keys = eeg_dataset.get_id_keys()
+    train_id,valid_test_id =train_test_split(id_keys,
+                                              train_size=data_split[0],  random_state=seed)
+    valid_id,test_id =train_test_split(valid_test_id,
+                                       train_size=data_split[2]/(data_split[1]+data_split[2]), random_state=seed)
+    train_dataset = eeg_dataset.get_subset(train_id)
+    valid_dataset = eeg_dataset.get_subset(valid_id)
+    test_dataset = eeg_dataset.get_subset(test_id)
+    # train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(eeg_dataset,
+    #                                                              data_split,
+    #                                                              generator=split_generator)
+    assert len(train_dataset) > MIN_DATA_LENGTH, f"No data found in train_dataset"
+    assert len(valid_dataset) > MIN_DATA_LENGTH, f"No data found in val_dataset"
+    assert len(test_dataset) > MIN_DATA_LENGTH, f"No data found in test_dataset"
+
+    return train_dataset, valid_dataset, test_dataset
 
 
 def get_metrics(output, target, metrics, is_binary, threshold=0.5):
