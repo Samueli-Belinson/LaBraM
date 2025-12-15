@@ -560,7 +560,7 @@ class NeuralTransformer(nn.Module):
 
 
 @register_model
-def labram_base_patch200_200(pretrained=False, **kwargs):
+def labram_base_patch200_200(pretrained=False, **kwargs) -> NeuralTransformer:
     model = NeuralTransformer(
         patch_size=200, embed_dim=200, depth=12, num_heads=10, mlp_ratio=4,
         qk_norm=partial(nn.LayerNorm, eps=1e-6), # qkv_bias=True,
@@ -569,7 +569,7 @@ def labram_base_patch200_200(pretrained=False, **kwargs):
     return model
 
 @register_model
-def labram_large_patch200_200(pretrained=False, **kwargs):
+def labram_large_patch200_200(pretrained=False, **kwargs) -> NeuralTransformer:
     model = NeuralTransformer(
         patch_size=200, embed_dim=400, depth=24, num_heads=16, mlp_ratio=4, out_chans=16, qk_norm=partial(nn.LayerNorm, eps=1e-6), # qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)

@@ -16,6 +16,9 @@ import utils
 from einops import rearrange
 from tqdm import tqdm
 
+from modeling_vqnsp import VQNSP
+
+
 def train_class_batch(model, samples, target, criterion, ch_names):
     outputs = model(samples, ch_names)
     loss = criterion(outputs, target)
@@ -28,6 +31,7 @@ def get_loss_scale_for_deepspeed(model):
 
 
 def train_one_epoch(model: torch.nn.Module,
+                    vqnsp: VQNSP,
                     criterion: torch.nn.Module,
                     data_loader: torch.utils.data.DataLoader,
                     optimizer: torch.optim.Optimizer,
@@ -67,6 +71,10 @@ def train_one_epoch(model: torch.nn.Module,
 
         samples = samples.float().to(device, non_blocking=True) / 100
         samples = rearrange(samples, 'B N (A T) -> B N A T', T=200)
+
+        with torch.no_grad():
+            with torch.cuda.amp.autocast():
+                input_ids = vqnsp.get_codebook_indices(samples, input_chans)
         
         targets = targets.to(device, non_blocking=True)
         if is_binary:

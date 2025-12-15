@@ -25,8 +25,8 @@ from optim_factory import create_optimizer
 from engine_for_pretraining import train_one_epoch
 from utils import NativeScalerWithGradNormCount as NativeScaler
 import utils
-import modeling_pretrain
-import modeling_vqnsp
+# import modeling_pretrain
+from modeling_vqnsp import VQNSP
 
 def get_args():
     parser = argparse.ArgumentParser('LaBraM pre-training script', add_help=False)
@@ -136,8 +136,8 @@ def get_model(args):
 
     return model
 
-def get_visual_tokenizer(args):
-    print(f"Creating visual tokenizer: {args.tokenizer_model}")
+def get_visual_tokenizer(args)-> VQNSP:
+    print(f"Creating visual tokenizer: {args.tokenizer_model} with weight from: {args.tokenizer_weight}")
     model = create_model(
             args.tokenizer_model,
             pretrained=True,

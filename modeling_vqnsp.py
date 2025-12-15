@@ -182,7 +182,7 @@ def get_model_default_params():
 
 @register_model
 def vqnsp_encoder_base_decoder_3x200x12(pretrained=False, pretrained_weight=None, as_tokenzer=False, EEG_size=1600, 
-                                            n_code=8192, code_dim=32, **kwargs):
+                                            n_code=8192, code_dim=32, **kwargs) -> VQNSP:
     encoder_config, decoder_config = get_model_default_params(), get_model_default_params()
 
     # encoder settings
@@ -222,7 +222,7 @@ def vqnsp_encoder_base_decoder_3x200x12(pretrained=False, pretrained_weight=None
 
 @register_model
 def vqnsp_encoder_large_decoder_3x200x24(pretrained=False, pretrained_weight=None, as_tokenzer=False, EEG_size=1600, 
-                                            n_code=8192, code_dim=32, **kwargs):
+                                            n_code=8192, code_dim=32, **kwargs) -> VQNSP:
     encoder_config, decoder_config = get_model_default_params(), get_model_default_params()
 
     # encoder settings
