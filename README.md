@@ -116,7 +116,14 @@ dataset_maker/make_TUEV.py
 ```
 
 This includes preprocessing and splitting into train/val/test sets. Hyperparameters such as **learning rate** and **warmup epochs** strongly affect results—tune them for best performance. Below is the TUAB example:
+NEW VERSION:
+```bash
+python run/run_class_finetuning_trainer.py
+--labram_asis - run in configuration as origin paper
+--run_config  run_cfg.yaml - run with yaml/json file
+--debug - run in debug mode
 
+OLD VERSION:
 ```bash
 OMP_NUM_THREADS=1 torchrun --nnodes=1 --nproc_per_node=8 run_class_finetuning_trainer.py \
     --output_dir ./checkpoints/finetune_tuab_base/ \
