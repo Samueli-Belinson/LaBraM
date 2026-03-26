@@ -392,7 +392,7 @@ def prepare_internal_dataset(cfg: ConfigProcEEGDataset,
     #     cfg.data_split = [0.8, 0.1, 0.1]
     if cfg.fold_split_path is None and  sum(cfg.data_split) < 1.0:
         raise RuntimeError("data_split must sum to 1.0")
-    elif not os.path.isfile(cfg.fold_split_path):
+    elif cfg.fold_split_path is not None and not os.path.isfile(cfg.fold_split_path):
         raise RuntimeError(f"fold_split_path {cfg.fold_split_path} does not exist")
     # assert len(cfg.data_split) == 3, \
     #     "data_split must have 3 elements: train, val, test"

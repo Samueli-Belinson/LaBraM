@@ -46,7 +46,7 @@ from train.evaluation import get_metrics, get_eval_metrics
 
 def get_default_cfg(labram_asis: bool = False) -> ConfigRunClassifierModel:
     cfg = ConfigRunClassifierModel()
-    cfg.train.epochs = 30
+    cfg.train.epochs = 10 #30. TODO: change to 30
     cfg.train.warmup_epochs = 5
     cfg.train.update_freq = 1
     cfg.train.save_ckpt_freq = 5
@@ -320,7 +320,8 @@ def get_args():
 
 def run_classifier_training(ds_init,
                             cfg: Union[str, ConfigRunClassifierModel] = None,
-                            debug: bool = False, labram_asis: bool = False) -> Dict[str, Any]:
+                            debug: bool = False,
+                            labram_asis: bool = False) -> Dict[str, Any]:
     # args: argparse.Namespace
     # dist_utils.init_distributed_mode(args)
 
@@ -810,41 +811,11 @@ def save_eval_results(
 def update_tb_logger(log_writer: TensorboardLogger, val_stats, test_stats=None, epoch: int = 0):
     for key, value in val_stats.items():
         log_writer.update(**{key: value}, head="val", step=epoch)
-        # if key == 'accuracy':
-        #     log_writer.update(accuracy=value, head="val", step=epoch)
-        # elif key == 'balanced_accuracy':
-        #     log_writer.update(balanced_accuracy=value, head="val", step=epoch)
-        # elif key == 'f1_weighted':
-        #     log_writer.update(f1_weighted=value, head="val", step=epoch)
-        # elif key == 'pr_auc':
-        #     log_writer.update(pr_auc=value, head="val", step=epoch)
-        # elif key == 'roc_auc':
-        #     log_writer.update(roc_auc=value, head="val", step=epoch)
-        # elif key == 'cohen_kappa':
-        #     log_writer.update(cohen_kappa=value, head="val", step=epoch)
-        # elif key == 'loss':
-        #     log_writer.update(loss=value, head="val", step=epoch)
-        # else:
-        #     log_writer.update(**{key: value}, head="val", step=epoch)
+
     if test_stats is not None:
         for key, value in test_stats.items():
             log_writer.update(**{key: value}, head="test", step=epoch)
-            # if key == 'accuracy':
-            #     log_writer.update(accuracy=value, head="test", step=epoch)
-            # elif key == 'balanced_accuracy':
-            #     log_writer.update(balanced_accuracy=value, head="test", step=epoch)
-            # elif key == 'f1_weighted':
-            #     log_writer.update(f1_weighted=value, head="test", step=epoch)
-            # elif key == 'pr_auc':
-            #     log_writer.update(pr_auc=value, head="test", step=epoch)
-            # elif key == 'roc_auc':
-            #     log_writer.update(roc_auc=value, head="test", step=epoch)
-            # elif key == 'cohen_kappa':
-            #     log_writer.update(cohen_kappa=value, head="test", step=epoch)
-            # elif key == 'loss':
-            #     log_writer.update(loss=value, head="test", step=epoch)
-            # else:
-            #     log_writer.update(**{key: value}, head="test", step=epoch)
+
 
 
 def build_classifier_model(cfg: ConfigRunClassifierModel,
@@ -1051,7 +1022,7 @@ def run_cross_validation(base_cfg: Union[ConfigRunClassifierModel, str, None],
                          ds_init=None):
     """
     Orchestrates K-fold cross-validation by:
-      1. Creating a shared base output directory with a CV run_name
+      1. Creating a shared base out_experiments directory with a CV run_name
       2. Generating stratified fold splits and saving per-fold split YAMLs
       3. Saving per-fold run_cfg YAMLs (each self-contained for parallel jobs)
       4. Calling run_classifier_training sequentially for each fold
@@ -1070,7 +1041,7 @@ def run_cross_validation(base_cfg: Union[ConfigRunClassifierModel, str, None],
     n_folds = base_cfg.data.cross_valid_folds
     assert n_folds >= 2, f"cross_valid_folds must be >= 2, got {n_folds}"
 
-    # --- 1. Base run_name and output directory ---
+    # --- 1. Base run_name and out_experiments directory ---
     base_run_name = _get_run_name(base_cfg, prefix="CV")
     base_output_dir = Path(
         base_cfg.log.ckpt_dir if not debug else os.path.join(base_cfg.log.ckpt_dir, 'DBG'),
@@ -1220,18 +1191,19 @@ if __name__ == '__main__':
                                           cfg=args.run_config,
                                           debug=args.debug,
                                           labram_asis=args.labram_asis)
-
-        print(f'Best epoch: {outputs["best_epoch"]}')
-        print(f'Best val_loss: {outputs["best_val_loss"]}')
-        print("Outputs Files: ")
-        for mode_name in ['last_test_outs', 'best_test_outs', 'last_valid_outs', 'best_valid_outs']:
-            out_files = outputs[mode_name]
-            print(f"mode_name: {mode_name}")
-            print(f'Epoch: {out_files["epoch"]}')
-            print(f'Mode: {out_files["mode"]}')
-            print(f'Confusion Matrix: {out_files["conf_matrix"]}')
-            print(f'Prediction Results: {out_files["pred_results"]}')
-            print(f'Stats: {out_files["stats"]}')
+        try:
+            print(f'Best epoch: {outputs["best_epoch"]}')
+            print("Outputs Files: ")
+            for mode_name in ['last_test_outs', 'best_test_outs', 'last_valid_outs', 'best_valid_outs']:
+                out_files = outputs[mode_name]
+                print(f"mode_name: {mode_name}")
+                print(f'Epoch: {out_files["epoch"]}')
+                print(f'Mode: {out_files["mode"]}')
+                print(f'Confusion Matrix: {out_files["conf_matrix"]}')
+                print(f'Prediction Results: {out_files["pred_results"]}')
+                print(f'Stats: {out_files["stats"]}')
+        except:
+            print("Uknown Error: Can't print outputs files.")
 
         # out_run_files = {'last_epoch': epoch,
         #                  'best_epoch': best_epoch,

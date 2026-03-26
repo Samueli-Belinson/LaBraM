@@ -66,7 +66,11 @@ def find_best_threshold_for_f1(pred_probs: np.ndarray,
     }
 
 
-def get_metrics(pred_probs, true_labels, metrics: List[str], is_binary: bool, threshold=0.5) -> Dict[str, float]:
+def get_metrics(pred_probs: np.ndarray,
+                true_labels: np.ndarray,
+                metrics: List[str],
+                is_binary: bool,
+                threshold: float = 0.5) -> Dict[str, float]:
     if is_binary:
         if 'roc_auc' not in metrics or sum(true_labels) * (
                 len(true_labels) - sum(true_labels)) != 0:  # to prevent all 0 or all 1 and raise the AUROC error
